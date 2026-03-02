@@ -75,6 +75,24 @@ class NewsEngine:
                 return True
         return False
 
+    def get_upcoming_events(self, hours=24):
+        now = datetime.now(timezone.utc)
+        future = now + timedelta(hours=hours)
+        upcoming = []
+
+        if self._use_feed and self.events:
+            for event_dt, currency, impact, title in self.events:
+                if now <= event_dt <= future:
+                    upcoming.append({
+                        "time": event_dt.isoformat(),
+                        "currency": currency,
+                        "impact": impact,
+                        "title": title,
+                        "seconds_away": int((event_dt - now).total_seconds())
+                    })
+        
+        return sorted(upcoming, key=lambda x: x["seconds_away"])
+
     @staticmethod
     def _currencies_for_pair(pair):
         if not pair:

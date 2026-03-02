@@ -688,6 +688,82 @@
       background: var(--border);
       border-radius: 3px;
     }
+
+    /* ── News Alarm Banner ── */
+    .news-alert-banner {
+      display: none;
+      background: linear-gradient(90deg, #ef4444, #f59e0b);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+      align-items: center;
+      gap: 16px;
+      box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4);
+      animation: alertSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards, alertPulse 2s infinite;
+      z-index: 100;
+    }
+
+    @keyframes alertSlideIn {
+      from {
+        transform: translateY(-20px);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+
+    @keyframes alertPulse {
+      0% {
+        box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4);
+      }
+
+      50% {
+        box-shadow: 0 4px 30px rgba(239, 68, 68, 0.7);
+      }
+
+      100% {
+        box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4);
+      }
+    }
+
+    .news-alert-banner.active {
+      display: flex;
+    }
+
+    .news-content {
+      flex: 1;
+    }
+
+    .news-content h3 {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+
+    .news-content p {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+
+    .news-dismiss-btn {
+      background: rgba(255, 255, 255, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      color: white;
+      padding: 6px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .news-dismiss-btn:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
   </style>
 </head>
 
@@ -713,6 +789,16 @@
         </div>
       </div>
     </header>
+
+    <!-- ══ NEWS ALERT BANNER ══ -->
+    <div class="news-alert-banner" id="newsAlertBanner">
+      <div style="font-size: 24px;">⚠️</div>
+      <div class="news-content">
+        <h3 id="newsAlertTitle">HIGH IMPACT NEWS SOON</h3>
+        <p id="newsAlertSub">A major event is starting in less than 5 minutes. Watch your trades!</p>
+      </div>
+      <button class="news-dismiss-btn" onclick="dismissNewsAlarm()">Dismiss Alarm</button>
+    </div>
 
     <!-- ══ SESSION BAR ══ -->
     <div class="session-bar" id="sessionBar">

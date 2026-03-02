@@ -106,6 +106,12 @@ def api_status():
     })
 
 
+@app.route("/api/news")
+def api_news():
+    upcoming = _news.get_upcoming_events(hours=24)
+    return jsonify(upcoming)
+
+
 @app.route("/stream")
 def stream():
     def event_generator():

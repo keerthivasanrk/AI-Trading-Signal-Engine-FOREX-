@@ -120,9 +120,6 @@ def main():
             if not can_trade:
                 return
 
-            if news.is_high_impact(pair):
-                return
-
             trend = engine["trend"].get_trend(history)
 
             volume_ok = engine["volume"].is_volume_confirmed(candle, history)
