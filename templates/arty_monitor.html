@@ -1,0 +1,1351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TMA Overlay — ARTY Monitor</title>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root {
+      --bg: #f4f6fa;
+      --panel: #ffffff;
+      --line: #d8deea;
+      --text: #111827;
+      --muted: #6b7280;
+      --up: #06a086;
+      --down: #ef4444;
+      --buy: #2563eb;
+      --sell: #ef4444;
+      --zone: rgba(80, 87, 104, 0.14);
+      --zone-border: rgba(80, 87, 104, 0.35);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Segoe UI, Arial, sans-serif;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .topbar {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .pill, .tf-btn {
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: #111827;
+      font-size: 13px;
+      padding: 8px 10px;
+    }
+    .pill { min-width: 120px; }
+    .tf-btn { min-width: 46px; cursor: pointer; font-weight: 600; }
+    .tf-btn.active { background: #ebeff7; border-color: #c8d1e3; }
+    .spacer { flex: 1; }
+    .status { font-size: 12px; color: var(--muted); }
+    .error { font-size: 12px; color: #be123c; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #shell { position: relative; height: calc(100vh - 56px); background: #131722; }
+    #chart { width: 100%; height: 100%; }
+    /* Session overlay bands */
+    .sess-band {
+      position: absolute;
+      top: 0; bottom: 0;
+      pointer-events: none;
+      z-index: 4;
+      opacity: 0.13;
+    }
+    /* Dynamic MA color legend */
+    #dynLegend {
+      position: absolute;
+      top: 8px; left: 50%;
+      transform: translateX(-50%);
+      z-index: 12;
+      display: flex;
+      gap: 6px;
+      pointer-events: none;
+    }
+    .leg-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 3px;
+      vertical-align: middle;
+    }
+    #zoneOverlay { position: absolute; inset: 0; pointer-events: none; z-index: 7; }
+    .zone-band {
+      position: absolute;
+      left: 24px;
+      right: 24px;
+      background: var(--zone);
+      border: 1px solid var(--zone-border);
+      border-radius: 2px;
+    }
+    .zone-label {
+      position: absolute;
+      right: 28px;
+      top: -15px;
+      font-size: 10px;
+      color: #4b5563;
+      border: 1px solid rgba(75, 85, 99, 0.25);
+      background: rgba(255, 255, 255, 0.88);
+      border-radius: 4px;
+      padding: 1px 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .fib-line {
+      position: absolute;
+      left: 24px;
+      right: 24px;
+      height: 0;
+      border-top: 1px dashed rgba(99, 102, 241, 0.7);
+      pointer-events: none;
+    }
+    .fib-line.fib-nearest {
+      border-top-width: 2px;
+      border-top-style: solid;
+      border-top-color: rgba(37, 99, 235, 0.9);
+    }
+    .fib-label {
+      position: absolute;
+      right: 28px;
+      top: -10px;
+      font-size: 10px;
+      color: #1f2937;
+      border: 1px solid rgba(75, 85, 99, 0.28);
+      background: rgba(255, 255, 255, 0.92);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: Consolas, monospace;
+      letter-spacing: 0.2px;
+    }
+    .hud { position: absolute; z-index: 10; pointer-events: none; }
+    #headerHud { left: 12px; top: 8px; display: flex; align-items: center; gap: 10px; }
+    #pairLine { font-size: 34px; font-weight: 700; color: #111827; }
+    #ohlcLine { font-size: 24px; font-weight: 600; color: #0f766e; }
+    #quotes { left: 12px; top: 56px; display: flex; gap: 10px; }
+    .qbox {
+      width: 118px;
+      background: rgba(255, 255, 255, 0.97);
+      border: 2px solid;
+      border-radius: 10px;
+      text-align: center;
+      padding: 8px 8px 7px;
+      box-shadow: 0 2px 8px rgba(2, 6, 23, 0.08);
+    }
+    .qbox .price { font-size: 24px; font-weight: 700; line-height: 1.0; }
+    .qbox .label { margin-top: 2px; font-size: 19px; font-weight: 700; line-height: 1.0; letter-spacing: 0.3px; }
+    .sell { border-color: var(--sell); color: var(--sell); }
+    .buy { border-color: var(--buy); color: var(--buy); }
+    #indicatorHud {
+      left: 12px;
+      right: 360px;
+      top: 115px;
+      font-size: 24px;
+      color: #374151;
+      border: 1px solid rgba(55, 65, 81, 0.18);
+      background: rgba(255, 255, 255, 0.84);
+      border-radius: 8px;
+      padding: 4px 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #riskHud {
+      right: 16px;
+      top: 10px;
+      width: 358px;
+      background: rgba(255, 255, 255, 0.97);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      pointer-events: auto;
+      box-shadow: 0 3px 12px rgba(2, 6, 23, 0.08);
+      display: none;
+    }
+    .rhead, .rrow { display: grid; grid-template-columns: 78px 1fr 1fr; }
+    .rhead { font-size: 14px; font-weight: 700; border-bottom: 1px solid #e6eaf2; }
+    .rhead div, .rrow div { padding: 7px 8px; text-align: center; }
+    .rhead .long { color: #16a34a; background: rgba(22, 163, 74, 0.1); }
+    .rhead .short { color: #dc2626; background: rgba(220, 38, 38, 0.1); }
+    .rrow { font-size: 14px; font-weight: 600; border-bottom: 1px solid #eef1f7; }
+    .rrow:last-child { border-bottom: none; }
+    .rrow .name { color: #6b7280; font-weight: 700; }
+    .rrow.target .name, .rrow.target .longv, .rrow.target .shortv { color: #16a34a; }
+    .rrow.stop .name, .rrow.stop .longv, .rrow.stop .shortv { color: #dc2626; }
+    #atrHud { font-size: 12px; color: #4b5563; text-align: right; padding: 6px 8px 8px; background: #fafbfe; }
+    #strip {
+      left: 12px;
+      right: 12px;
+      bottom: 8px;
+      font-size: 12px;
+      color: #374151;
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid rgba(107, 114, 128, 0.24);
+      border-radius: 8px;
+      padding: 6px 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #strip .ok { color: #16a34a; font-weight: 700; }
+    #strip .bad { color: #dc2626; font-weight: 700; }
+    #strip .warn { color: #d97706; font-weight: 700; }
+    .tv-live-marker {
+      position: absolute;
+      right: 0;
+      top: 0;
+      transform: translateY(-50%);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-width: 74px;
+      padding: 4px 9px;
+      color: #fff;
+      border-radius: 4px 0 0 4px;
+      font-weight: 700;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      pointer-events: none;
+      z-index: 30;
+      line-height: 1.04;
+    }
+    .tv-live-marker .tv-price { font-size: 24px; letter-spacing: -0.3px; }
+    .tv-live-marker .tv-time { margin-top: 2px; font-size: 12px; opacity: 0.96; font-family: Consolas, monospace; }
+    #indicatorBackdrop {
+      position: fixed;
+      inset: 56px 0 0 0;
+      background: rgba(2, 6, 23, 0.45);
+      z-index: 32;
+      display: none;
+    }
+    #indicatorPanel {
+      position: fixed;
+      top: 56px;
+      right: 0;
+      width: min(480px, 96vw);
+      height: calc(100vh - 56px);
+      background: #0f172a;
+      border-left: 1px solid #1f2937;
+      color: #d1d5db;
+      z-index: 33;
+      transform: translateX(100%);
+      transition: transform 180ms ease;
+      display: flex;
+      flex-direction: column;
+    }
+    #indicatorPanel.open { transform: translateX(0); }
+    .ind-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #1f2937;
+      padding: 10px 12px;
+      background: #111827;
+    }
+    .ind-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #f9fafb;
+    }
+    .ind-close {
+      border: 1px solid #374151;
+      border-radius: 6px;
+      background: #1f2937;
+      color: #d1d5db;
+      font-size: 12px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    .ind-meta {
+      border-bottom: 1px solid #1f2937;
+      padding: 8px 12px;
+      color: #9ca3af;
+      font-size: 12px;
+    }
+    .ind-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px 20px;
+    }
+    .ind-section { margin-bottom: 14px; }
+    .ind-section h4 {
+      margin: 0 0 8px 0;
+      font-size: 13px;
+      color: #93c5fd;
+      letter-spacing: 0.2px;
+      text-transform: uppercase;
+    }
+    .ind-grid {
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0b1220;
+    }
+    .ind-row {
+      display: grid;
+      grid-template-columns: minmax(135px, 1.1fr) minmax(120px, 1fr) minmax(60px, 0.7fr);
+      gap: 8px;
+      align-items: center;
+      padding: 7px 9px;
+      border-bottom: 1px solid #111827;
+      font-size: 12px;
+    }
+    .ind-row:last-child { border-bottom: none; }
+    .ind-name { color: #e5e7eb; font-weight: 600; }
+    .ind-value { color: #d1d5db; font-family: Consolas, monospace; text-align: right; }
+    .ind-state { text-align: right; }
+    .ind-badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 1px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      border: 1px solid transparent;
+    }
+    .ind-on { color: #86efac; border-color: rgba(134, 239, 172, 0.35); background: rgba(34, 197, 94, 0.12); }
+    .ind-mid { color: #fde68a; border-color: rgba(253, 230, 138, 0.3); background: rgba(234, 179, 8, 0.14); }
+    .ind-off { color: #fca5a5; border-color: rgba(252, 165, 165, 0.3); background: rgba(239, 68, 68, 0.14); }
+    .ind-note {
+      color: #94a3b8;
+      font-size: 11px;
+      margin-top: 5px;
+      line-height: 1.4;
+    }
+    .indicator-btn {
+      min-width: 82px;
+      font-size: 12px;
+      font-weight: 700;
+      border-color: #334155;
+      background: #0f172a;
+      color: #cbd5e1;
+    }
+    .indicator-btn.open {
+      background: #1e293b;
+      border-color: #64748b;
+      color: #f8fafc;
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar" style="background:#1e2230; border-bottom-color:#2a2e3d;">
+    <select id="pair" class="pill"></select>
+    <button class="tf-btn" data-tf="M15">15m</button>
+    <button class="tf-btn active" data-tf="H1">1h</button>
+    <button class="tf-btn" data-tf="H4">4h</button>
+    <label class="pill" style="font-size:11px;padding:4px 8px;"><input id="autoScroll" type="checkbox" checked /> Auto-scroll</label>
+    <label class="pill" style="font-size:11px;padding:4px 8px;"><input id="showLondon" type="checkbox" checked /> 🇬🇧 London</label>
+    <label class="pill" style="font-size:11px;padding:4px 8px;"><input id="showNY" type="checkbox" checked /> 🇺🇸 NY</label>
+    <label class="pill" style="font-size:11px;padding:4px 8px;"><input id="showTokyo" type="checkbox" /> 🇯🇵 Tokyo</label>
+    <label class="pill" style="font-size:11px;padding:4px 8px;"><input id="showSydney" type="checkbox" /> 🇦🇺 Sydney</label>
+    <label class="pill" style="font-size:11px;padding:4px 8px;"><input id="dynColor" type="checkbox" /> 🌈 DynColor</label>
+    <label class="pill" style="font-size:11px;padding:4px 8px;"><input id="showRaw" type="checkbox" /> Raw Signals</label>
+    <button id="indicatorBtn" class="tf-btn indicator-btn">Indicator</button>
+    <a class="pill" href="/" target="_blank" rel="noopener noreferrer" style="font-size:11px;">Main</a>
+    <div class="spacer"></div>
+    <div id="status" class="status">Loading...</div>
+    <div id="error" class="error"></div>
+  </div>
+  <div id="indicatorBackdrop"></div>
+  <aside id="indicatorPanel" aria-hidden="true">
+    <div class="ind-head">
+      <div class="ind-title">Technical Analysis Panel</div>
+      <button id="indicatorClose" class="ind-close" type="button">Close</button>
+    </div>
+    <div id="indicatorMeta" class="ind-meta">Waiting for analysis feed...</div>
+    <div class="ind-content">
+      <section class="ind-section">
+        <h4>Modules</h4>
+        <div id="moduleList" class="ind-grid"></div>
+      </section>
+      <section class="ind-section">
+        <h4>Strategies</h4>
+        <div id="strategyList" class="ind-grid"></div>
+      </section>
+      <section class="ind-section">
+        <h4>Indicators</h4>
+        <div id="indicatorList" class="ind-grid"></div>
+      </section>
+      <div class="ind-note">Panel reflects live technical-analysis state for the selected pair/timeframe.</div>
+    </div>
+  </aside>
+
+  <div id="shell">
+    <div id="chart"></div>
+    <div id="sessOverlay" style="position:absolute;inset:0;pointer-events:none;z-index:4;"></div>
+    <div id="zoneOverlay"></div>
+    <div id="headerHud" class="hud"><div id="pairLine">EUR/USD · 1h · OANDA</div><div id="ohlcLine">O -- H -- L -- C --</div></div>
+    <div id="quotes" class="hud">
+      <div class="qbox sell"><div id="sellPrice" class="price">--</div><div class="label">SELL</div></div>
+      <div class="qbox buy"><div id="buyPrice" class="price">--</div><div class="label">BUY</div></div>
+    </div>
+    <div id="indicatorHud" class="hud">TMA Overlay | 21/50/100/200 SMMA | 3LS | Engulf | Sessions | DynColor</div>
+    <div id="riskHud" class="hud">
+      <div class="rhead"><div> </div><div class="long">Long</div><div class="short">Short</div></div>
+      <div class="rrow target"><div class="name">Target</div><div id="longTarget" class="longv">--</div><div id="shortTarget" class="shortv">--</div></div>
+      <div class="rrow"><div class="name">BE</div><div id="longBE" class="longv">--</div><div id="shortBE" class="shortv">--</div></div>
+      <div class="rrow stop"><div class="name">Stop</div><div id="longStop" class="longv">--</div><div id="shortStop" class="shortv">--</div></div>
+      <div id="atrHud">ATR --</div>
+    </div>
+    <div id="strip" class="hud">TMA Overlay: waiting for data...</div>
+  </div>
+
+  <script>
+    const PAIRS = {{ pairs | tojson }};
+    const pairEl = document.getElementById("pair");
+    const tfButtons = [...document.querySelectorAll(".tf-btn[data-tf]")];
+    const autoScrollEl = document.getElementById("autoScroll");
+    const statusEl = document.getElementById("status");
+    const errorEl = document.getElementById("error");
+    const pairLineEl = document.getElementById("pairLine");
+    const ohlcLineEl = document.getElementById("ohlcLine");
+    const sellPriceEl = document.getElementById("sellPrice");
+    const buyPriceEl = document.getElementById("buyPrice");
+    const indicatorHudEl = document.getElementById("indicatorHud");
+    const stripEl = document.getElementById("strip");
+    const longTargetEl = document.getElementById("longTarget");
+    const shortTargetEl = document.getElementById("shortTarget");
+    const longBEEl = document.getElementById("longBE");
+    const shortBEEl = document.getElementById("shortBE");
+    const longStopEl = document.getElementById("longStop");
+    const shortStopEl = document.getElementById("shortStop");
+    const atrHudEl = document.getElementById("atrHud");
+    const zoneOverlay = document.getElementById("zoneOverlay");
+    const shell = document.getElementById("shell");
+    const chartContainer = document.getElementById("chart");
+    const indicatorBtnEl = document.getElementById("indicatorBtn");
+    const indicatorPanelEl = document.getElementById("indicatorPanel");
+    const indicatorCloseEl = document.getElementById("indicatorClose");
+    const indicatorBackdropEl = document.getElementById("indicatorBackdrop");
+    const indicatorMetaEl = document.getElementById("indicatorMeta");
+    const moduleListEl = document.getElementById("moduleList");
+    const strategyListEl = document.getElementById("strategyList");
+    const indicatorListEl = document.getElementById("indicatorList");
+
+    let timeframe = "H1";
+    let refreshHandle = null;
+    let inFlight = false;
+    let localWorking = { supports: [], resistances: [], tol: 0 };
+    let lastRows = [];
+    let lastAnalysis = null;
+    let indicatorPanelOpen = false;
+
+    // ── UI toggles ──────────────────────────────────────────────────
+    const showLondonEl  = document.getElementById("showLondon");
+    const showNYEl      = document.getElementById("showNY");
+    const showTokyoEl   = document.getElementById("showTokyo");
+    const showSydneyEl  = document.getElementById("showSydney");
+    const dynColorEl    = document.getElementById("dynColor");
+    const showRawEl     = document.getElementById("showRaw");
+    const sessOverlay   = document.getElementById("sessOverlay");
+
+    // ── RSI gradient palette (200-entry red→green matching Pine) ────
+    function buildGradient() {
+      const g = [];
+      for (let i = 0; i < 200; i++) {
+        const t = i / 199;
+        // red  #FF1100 → yellow → green #30FF85
+        let r, gr, b;
+        if (t < 0.5) {
+          const u = t / 0.5;
+          r = 255; gr = Math.round(u * 171); b = 0;
+        } else {
+          const u = (t - 0.5) / 0.5;
+          r = Math.round(255 * (1 - u) * 0.19); gr = 255; b = Math.round(u * 133);
+        }
+        g.push(`rgb(${r},${gr},${b})`);
+      }
+      return g;
+    }
+    const CSS_GRADIENT = buildGradient();
+
+    function getDynColor(rsiVal) {
+      if (rsiVal == null) return null;
+      const idx = Math.max(0, Math.min(199, Math.round((rsiVal / 100) * 199)));
+      return CSS_GRADIENT[idx];
+    }
+
+    const chart = LightweightCharts.createChart(chartContainer, { width: chartContainer.clientWidth, height: chartContainer.clientHeight, layout: { background: { color: "#131722" }, textColor: "#d1d4dc" }, grid: { vertLines: { color: "#1e2230" }, horzLines: { color: "#1e2230" } }, rightPriceScale: { borderColor: "#2a2e3d" }, timeScale: { borderColor: "#2a2e3d", timeVisible: true, rightOffset: 5, barSpacing: 8, minBarSpacing: 0.4 }, handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true }, handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true } });
+
+    // Cloud fill (RSI fill): drawn first so it's behind lines
+    const cloudBullMain = chart.addAreaSeries({ lineColor: "rgba(0,0,0,0)", topColor: "rgba(34,197,94,0.22)", bottomColor: "rgba(34,197,94,0.04)", priceLineVisible: false, lastValueVisible: false });
+    const cloudBullMask = chart.addAreaSeries({ lineColor: "rgba(0,0,0,0)", topColor: "rgba(19,23,34,0.86)", bottomColor: "rgba(19,23,34,0.86)", priceLineVisible: false, lastValueVisible: false });
+    const cloudBearMain = chart.addAreaSeries({ lineColor: "rgba(0,0,0,0)", topColor: "rgba(239,68,68,0.20)", bottomColor: "rgba(239,68,68,0.04)", priceLineVisible: false, lastValueVisible: false });
+    const cloudBearMask = chart.addAreaSeries({ lineColor: "rgba(0,0,0,0)", topColor: "rgba(19,23,34,0.86)", bottomColor: "rgba(19,23,34,0.86)", priceLineVisible: false, lastValueVisible: false });
+
+    // MA1(21)=green, MA2(50)=red, MA3(100)=yellow, MA4(200)=white — Pine defaults
+    const sm21Series  = chart.addLineSeries({ color: "#22c55e", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    const sm50Series  = chart.addLineSeries({ color: "#ef4444", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    const sm100Series = chart.addLineSeries({ color: "#eab308", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    const sm200Series = chart.addLineSeries({ color: "#ffffff", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    const sm200BullSeries = chart.addLineSeries({ color: "#22c55e", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    const sm200BearSeries = chart.addLineSeries({ color: "#ef4444", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+
+    const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350", borderVisible: false, wickUpColor: "#26a69a", wickDownColor: "#ef5350", priceLineVisible: false, lastValueVisible: false });
+    const volume  = chart.addHistogramSeries({ color: "rgba(38,166,154,0.35)", priceFormat: { type: "volume" }, priceScaleId: "", scaleMargins: { top: 0.82, bottom: 0 } });
+    chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.04, bottom: 0.27 } });
+    chart.priceScale("").applyOptions({ scaleMargins: { top: 0.74, bottom: 0.00 } });
+
+    const liveMarker = document.createElement("div");
+    liveMarker.className = "tv-live-marker";
+    liveMarker.innerHTML = '<div class="tv-price">--</div><div class="tv-time">--:--</div>';
+    shell.appendChild(liveMarker);
+    const liveMarkerPriceEl = liveMarker.querySelector(".tv-price");
+    const liveMarkerTimeEl = liveMarker.querySelector(".tv-time");
+    const livePriceLine = candles.createPriceLine({ price: 0, color: "#ef4444", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false, title: "" });
+
+    const pipSize = (pair) => pair.endsWith("JPY") ? 0.01 : (pair.startsWith("XAU") || pair.startsWith("XAG")) ? 0.1 : pair.startsWith("BTC") ? 1 : 0.0001;
+    const fmt = (pair, v) => pair.endsWith("JPY") ? Number(v).toFixed(3) : pair.startsWith("BTC") ? Number(v).toFixed(2) : (pair.startsWith("XAU") || pair.startsWith("XAG")) ? Number(v).toFixed(3) : Number(v).toFixed(5);
+    const cd = (s) => { const n = Math.max(0, Number(s || 0)); const m = Math.floor(n / 60); const sec = n % 60; return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`; };
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[m]));
+    const asBool = (v) => Boolean(v);
+    const boolText = (v) => asBool(v) ? "ON" : "OFF";
+    const boolClass = (v) => asBool(v) ? "ind-on" : "ind-off";
+    function num(v, digits = 2) {
+      if (v == null) return "--";
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(digits) : "--";
+    }
+    function priceNum(pair, v) {
+      if (v == null) return "--";
+      const n = Number(v);
+      return Number.isFinite(n) ? fmt(pair, n) : "--";
+    }
+    function badgeByScore(hit, total) {
+      if (!total || total <= 0) return { cls: "ind-mid", text: "INFO" };
+      if (hit >= total) return { cls: "ind-on", text: "ALIGNED" };
+      if (hit > 0) return { cls: "ind-mid", text: "PARTIAL" };
+      return { cls: "ind-off", text: "WAIT" };
+    }
+    function renderRows(container, rows) {
+      container.innerHTML = rows.map((r) => `
+        <div class="ind-row">
+          <div class="ind-name">${esc(r.name)}</div>
+          <div class="ind-value">${esc(r.value)}</div>
+          <div class="ind-state"><span class="ind-badge ${esc(r.cls || "ind-mid")}">${esc(r.state || "LIVE")}</span></div>
+        </div>
+      `).join("");
+    }
+    function setIndicatorPanelOpen(open) {
+      indicatorPanelOpen = Boolean(open);
+      indicatorPanelEl.classList.toggle("open", indicatorPanelOpen);
+      indicatorBtnEl.classList.toggle("open", indicatorPanelOpen);
+      indicatorBackdropEl.style.display = indicatorPanelOpen ? "block" : "none";
+      indicatorPanelEl.setAttribute("aria-hidden", indicatorPanelOpen ? "false" : "true");
+    }
+    function renderIndicatorPanel(pair, payload, analysis) {
+      if (!analysis) {
+        indicatorMetaEl.textContent = `${pair.replace("_", "/")} ${timeframe} | analysis unavailable`;
+        renderRows(moduleListEl, [{ name: "Modules", value: "Waiting for analysis feed", cls: "ind-mid", state: "WAIT" }]);
+        renderRows(strategyListEl, [{ name: "Strategies", value: "Waiting for analysis feed", cls: "ind-mid", state: "WAIT" }]);
+        renderRows(indicatorListEl, [{ name: "Indicators", value: "Waiting for analysis feed", cls: "ind-mid", state: "WAIT" }]);
+        return;
+      }
+      const checklist = analysis.checklist || {};
+      const levels = analysis.levels || {};
+      const ind = analysis.indicators || {};
+      const plan = analysis.trade_plan || {};
+      const tfLabel = (payload?.timeframe || timeframe || "").replace("M15", "15m").replace("H1", "1h").replace("H4", "4h");
+      indicatorMetaEl.textContent = `${pair.replace("_", "/")} ${tfLabel} | State ${analysis.state || "SCANNING"} | Tier ${analysis.tier || "TIER_C"} | Setup ${num(analysis.setup_proximity, 1)}%`;
+
+      const moduleDefs = [
+        {
+          name: "M1 Support/Resistance",
+          checks: ["sr_zone_aligned"],
+          value: `S ${levels?.nearest_support?.level != null ? priceNum(pair, levels.nearest_support.level) : "--"} | R ${levels?.nearest_resistance?.level != null ? priceNum(pair, levels.nearest_resistance.level) : "--"} | H1 retests ${levels.h1_retests ?? "--"}`,
+        },
+        {
+          name: "M2 Supply/Demand",
+          checks: ["supply_demand_zone_aligned"],
+          value: `Demand ${boolText(levels.demand_zone_hit)} | Supply ${boolText(levels.supply_zone_hit)} | H4 priority ${boolText(levels.h4_zone_priority_ok)}`,
+        },
+        {
+          name: "M3 RSI + Divergence",
+          checks: ["rsi_level_direction_aligned", "rsi_divergence_aligned"],
+          value: `RSI ${num(ind.rsi14, 2)} | Div ${ind.rsi_divergence || "none"} | OB/OS ${boolText(ind.rsi_overbought)}/${boolText(ind.rsi_oversold)}`,
+        },
+        {
+          name: "M4 Candlestick",
+          checks: ["candlestick_pattern_aligned"],
+          value: `${ind.pattern || "none"} | strength ${num(ind.pattern_strength, 2)} | bonus ${num(ind.candlestick_bonus, 2)}`,
+        },
+        {
+          name: "M5 Institutional Flow",
+          checks: ["volume_institutional_aligned"],
+          value: `Accum ${boolText(ind.accumulation)} | Dist ${boolText(ind.distribution)} | Liq sweep ${boolText(levels.aligned_liquidity_grab)}`,
+        },
+        {
+          name: "M6 ARTY",
+          checks: ["arty_signal_aligned"],
+          value: `Buy ${boolText(ind.arty_buy_arrow)} | Sell ${boolText(ind.arty_sell_arrow)} | Cloud ${ind.arty_cloud_state || "flat"}`,
+        },
+        {
+          name: "M7 Donchian",
+          checks: ["donchian_touch_aligned"],
+          value: `Touch B/T ${boolText(ind.donchian_buy_touch)}/${boolText(ind.donchian_sell_touch)} | Max confluence ${boolText(ind.donchian_rsi_max_confluence)}`,
+        },
+        {
+          name: "M8 MACD + OsMA + ADX",
+          checks: ["macd_signal_aligned", "adx_strength_aligned"],
+          value: `MACD hist ${num(ind.macd_hist, 4)} | OsMA ${num(ind.osma, 4)} | ADX ${num(ind.adx14, 2)}`,
+        },
+        {
+          name: "M9 Swing (EMA + SAR)",
+          checks: ["swing_ema_9_50_aligned", "parabolic_sar_aligned"],
+          value: `EMA9/50 ${num(ind.ema9, 5)}/${num(ind.ema50, 5)} | SAR streak ${ind.parabolic_sar_streak ?? "--"}`,
+        },
+        {
+          name: "M10 SMC",
+          checks: ["smc_signal_aligned"],
+          value: `OB B/S ${boolText(ind.smc_in_bullish_order_block)}/${boolText(ind.smc_in_bearish_order_block)} | BOS ${ind.smc_bos || "none"} | CHOCH ${ind.smc_choch || "none"} | FVG ${ind.fvg || "none"}`,
+        },
+        {
+          name: "M11 Chart Pattern Confirm",
+          checks: ["chart_pattern_confirmation"],
+          value: `Primary ${ind.chart_pattern_primary || "none"} | Dir ${ind.chart_pattern_direction || "neutral"} | Strength ${num(ind.chart_pattern_strength, 2)}`,
+        },
+        {
+          name: "M12 Fibonacci",
+          checks: ["fibonacci_confluence_aligned"],
+          value: `TF ${ind.fib_active_timeframe || "--"} | Trend ${ind.fib_trend || "ranging"} | Near ${ind.fib_nearest_percentage || "--"} @ ${ind.fib_nearest_price != null ? priceNum(pair, ind.fib_nearest_price) : "--"}`,
+        },
+      ];
+      const moduleRows = moduleDefs.map((m) => {
+        const checks = Array.isArray(m.checks) ? m.checks : [];
+        const hit = checks.filter((k) => asBool(checklist[k])).length;
+        const badge = checks.length ? badgeByScore(hit, checks.length) : { cls: "ind-mid", text: "INFO" };
+        return { name: m.name, value: checks.length ? `${m.value} | checks ${hit}/${checks.length}` : m.value, cls: badge.cls, state: badge.text };
+      });
+
+      const strategyDefs = [
+        { name: "Zone Flip Retest", ok: asBool(levels.zone_flip_buy_confirmed) || asBool(levels.zone_flip_sell_confirmed), value: `Buy flip ${boolText(levels.zone_flip_buy_confirmed)} | Sell flip ${boolText(levels.zone_flip_sell_confirmed)}` },
+        { name: "RSI Extreme + Divergence", ok: (asBool(ind.rsi_buy_ready) || asBool(ind.rsi_sell_ready)) && asBool(ind.divergence_context_ok), value: `Ready B/S ${boolText(ind.rsi_buy_ready)}/${boolText(ind.rsi_sell_ready)} | Div context ${boolText(ind.divergence_context_ok)}` },
+        { name: "Donchian Boundary Reversal", ok: asBool(ind.donchian_rsi_max_confluence) || asBool(checklist.donchian_touch_aligned), value: `Upper/Lower ${priceNum(pair, ind.donchian_upper)}/${priceNum(pair, ind.donchian_lower)}` },
+        { name: "Swing Strategy (M9)", ok: asBool(ind.swing_buy_ready) || asBool(ind.swing_sell_ready), value: `Buy/Sell ${boolText(ind.swing_buy_ready)}/${boolText(ind.swing_sell_ready)} | EMA9>50 ${boolText(ind.ema9_above_ema50)} | EMA50>9 ${boolText(ind.ema50_above_ema9)} | EMA50>90 ${boolText(ind.ema50_above_ema90)} | EMA50<90 ${boolText(ind.ema50_below_ema90)}` },
+        { name: "ARTY Filtered Arrows", ok: asBool(ind.arty_buy_arrow) || asBool(ind.arty_sell_arrow), value: `Raw B/S ${boolText(ind.arty_buy_arrow_raw)}/${boolText(ind.arty_sell_arrow_raw)} | Filtered B/S ${boolText(ind.arty_buy_arrow)}/${boolText(ind.arty_sell_arrow)}` },
+        { name: "Institutional Liquidity", ok: asBool(levels.aligned_liquidity_grab) || asBool(levels.buy_side_stop_hunt) || asBool(levels.sell_side_stop_hunt), value: `Aligned ${boolText(levels.aligned_liquidity_grab)} | Opposing ${boolText(levels.opposing_liquidity_grab)}` },
+        { name: "Macro/Session Gate", ok: asBool(checklist.fundamental_news_clear) && asBool(checklist.session_timing_clear), value: `News ${boolText(checklist.fundamental_news_clear)} | Session ${boolText(checklist.session_timing_clear)} | RR ${num(plan.rr, 2)}` },
+        { name: "Fibonacci Confluence Entry", ok: asBool(checklist.fibonacci_confluence_aligned), value: `Trend ${ind.fib_trend || "ranging"} | Near ${ind.fib_nearest_percentage || "--"} | Confluence ${num(ind.fib_confluence_strength, 2)} | HP signals ${ind.fib_high_probability_count ?? 0}` },
+      ];
+      const strategyRows = strategyDefs.map((s) => ({ name: s.name, value: s.value, cls: s.ok ? "ind-on" : "ind-off", state: s.ok ? "ACTIVE" : "BLOCKED" }));
+
+      const indicatorRows = [
+        { name: "RSI(14)", value: num(ind.rsi14, 2), cls: "ind-mid", state: "LIVE" },
+        { name: "RSI Bands", value: `${num(ind.rsi_lower_band, 0)} / ${num(ind.rsi_upper_band, 0)}`, cls: "ind-mid", state: "SET" },
+        { name: "RSI Swing Midline", value: `${num(ind.rsi_swing_mid, 0)} | buy-zone ${boolText(ind.rsi_swing_buy_zone)} | sell-zone ${boolText(ind.rsi_swing_sell_zone)}`, cls: asBool(ind.rsi_swing_buy_zone) || asBool(ind.rsi_swing_sell_zone) ? "ind-on" : "ind-mid", state: "M9" },
+        { name: "RSI Divergence", value: ind.rsi_divergence || "none", cls: ind.rsi_divergence && ind.rsi_divergence !== "none" ? "ind-on" : "ind-off", state: ind.rsi_divergence && ind.rsi_divergence !== "none" ? "FOUND" : "NONE" },
+        { name: "EMA8 / SMA18", value: `${priceNum(pair, ind.ema8)} / ${priceNum(pair, ind.sma18)}`, cls: "ind-mid", state: ind.ema8_sma18_state ? String(ind.ema8_sma18_state).toUpperCase() : "LIVE" },
+        { name: "EMA9 / EMA50 / EMA90", value: `${priceNum(pair, ind.ema9)} / ${priceNum(pair, ind.ema50)} / ${priceNum(pair, ind.ema90)}`, cls: "ind-mid", state: "LIVE" },
+        { name: "EMA200", value: priceNum(pair, ind.ema200), cls: "ind-mid", state: ind.ema200_macro_bias ? String(ind.ema200_macro_bias).toUpperCase() : "LIVE" },
+        { name: "SMMA 21/50/100/200", value: `${priceNum(pair, ind.smma21)} / ${priceNum(pair, ind.smma50)} / ${priceNum(pair, ind.smma100)} / ${priceNum(pair, ind.smma200)}`, cls: "ind-mid", state: "LIVE" },
+        { name: "SMMA200 Dynamic", value: ind.smma200_dynamic_state || "mixed", cls: ind.smma200_dynamic_state === "bullish" || ind.smma200_dynamic_state === "bearish" ? "ind-on" : "ind-mid", state: "STATE" },
+        { name: "ARTY Cloud", value: ind.arty_cloud_state || "flat", cls: ind.arty_cloud_state === "flat" ? "ind-mid" : "ind-on", state: "STATE" },
+        { name: "Donchian U/B/L", value: `${priceNum(pair, ind.donchian_upper)} / ${priceNum(pair, ind.donchian_basis)} / ${priceNum(pair, ind.donchian_lower)}`, cls: "ind-mid", state: "LIVE" },
+        { name: "MACD line/signal/hist", value: `${num(ind.macd_line, 4)} / ${num(ind.macd_signal, 4)} / ${num(ind.macd_hist, 4)}`, cls: "ind-mid", state: "LIVE" },
+        { name: "MACD switches", value: `+ ${boolText(ind.macd_hist_switch_positive)} | - ${boolText(ind.macd_hist_switch_negative)} | z+ ${boolText(ind.macd_zero_cross_above)} | z- ${boolText(ind.macd_zero_cross_below)}`, cls: "ind-mid", state: "STATE" },
+        { name: "OsMA", value: `${num(ind.osma, 4)} (prev ${num(ind.osma_prev, 4)})`, cls: "ind-mid", state: asBool(ind.osma_rising) ? "RISING" : (asBool(ind.osma_falling) ? "FALLING" : "FLAT") },
+        { name: "ADX / +DI / -DI", value: `${num(ind.adx14, 2)} / ${num(ind.pdi, 2)} / ${num(ind.mdi, 2)}`, cls: asBool(ind.adx_trending) ? "ind-on" : (asBool(ind.adx_ranging) ? "ind-off" : "ind-mid"), state: asBool(ind.adx_trending) ? "TREND" : (asBool(ind.adx_ranging) ? "RANGE" : "LIVE") },
+        { name: "Parabolic SAR", value: `${priceNum(pair, ind.parabolic_sar)} | streak ${ind.parabolic_sar_streak ?? "--"} | cfg ${num(ind.parabolic_sar_start,2)}/${num(ind.parabolic_sar_increment,2)}/${num(ind.parabolic_sar_maximum,1)} | buy/sell ready ${boolText(ind.parabolic_sar_buy_ready)}/${boolText(ind.parabolic_sar_sell_ready)}`, cls: ind.parabolic_sar_side ? "ind-mid" : "ind-off", state: ind.parabolic_sar_side ? String(ind.parabolic_sar_side).toUpperCase() : "NONE" },
+        { name: "ATR14", value: num(ind.atr14, 5), cls: "ind-mid", state: "VOL" },
+        { name: "Volume state", value: `${ind.volume_price_trend || "--"} / ${ind.volume_trend || "--"}`, cls: asBool(ind.institutional_volume_aligned) ? "ind-on" : "ind-off", state: asBool(ind.institutional_volume_aligned) ? "ALIGNED" : "OFF" },
+        { name: "Liquidity", value: `buy sweep ${boolText(levels.buy_side_stop_hunt)} | sell sweep ${boolText(levels.sell_side_stop_hunt)}`, cls: asBool(levels.aligned_liquidity_grab) ? "ind-on" : "ind-mid", state: asBool(levels.aligned_liquidity_grab) ? "ALIGNED" : "WATCH" },
+        { name: "SMC FVG", value: ind.fvg || "none", cls: ind.fvg && ind.fvg !== "none" ? "ind-on" : "ind-off", state: ind.fvg && ind.fvg !== "none" ? "FOUND" : "NONE" },
+        { name: "SMC Order Blocks", value: `Bull ${boolText(ind.smc_in_bullish_order_block)} | Bear ${boolText(ind.smc_in_bearish_order_block)} | score B/S ${num(ind.smc_bullish_score, 0)}/${num(ind.smc_bearish_score, 0)}`, cls: asBool(ind.smc_signal_aligned) ? "ind-on" : "ind-off", state: asBool(ind.smc_signal_aligned) ? "ALIGNED" : "WAIT" },
+        { name: "SMC Liquidity Zones", value: `EQH ${boolText(ind.smc_near_equal_highs)} | EQL ${boolText(ind.smc_near_equal_lows)} | buy/sell sweep ${boolText(levels.buy_side_stop_hunt)}/${boolText(levels.sell_side_stop_hunt)}`, cls: asBool(ind.smc_near_equal_highs) || asBool(ind.smc_near_equal_lows) ? "ind-mid" : "ind-off", state: "WATCH" },
+        { name: "SMC Premium/Discount", value: `Premium ${boolText(ind.smc_premium_zone)} | Discount ${boolText(ind.smc_discount_zone)} | EQ ${priceNum(pair, ind.smc_equilibrium)}`, cls: asBool(ind.smc_premium_zone) || asBool(ind.smc_discount_zone) ? "ind-mid" : "ind-off", state: "PD" },
+        { name: "Chart Pattern Primary", value: `${ind.chart_pattern_primary || "none"} | ${ind.chart_pattern_direction || "neutral"} | ${num(ind.chart_pattern_strength, 2)}`, cls: asBool(ind.chart_pattern_aligned_with_bias) ? "ind-on" : "ind-mid", state: asBool(ind.chart_pattern_aligned_with_bias) ? "CONFIRM" : "INFO" },
+        { name: "Chart Pattern Matches", value: `${Array.isArray(ind.chart_pattern_matches) && ind.chart_pattern_matches.length ? ind.chart_pattern_matches.slice(0, 4).join(", ") : "none"}`, cls: Array.isArray(ind.chart_pattern_matches) && ind.chart_pattern_matches.length ? "ind-mid" : "ind-off", state: Array.isArray(ind.chart_pattern_matches) && ind.chart_pattern_matches.length ? "FOUND" : "NONE" },
+        { name: "Fib Trend/TF", value: `${ind.fib_trend || "ranging"} | TF ${ind.fib_active_timeframe || "--"} | aligned ${boolText(ind.fibonacci_confluence_aligned)}`, cls: asBool(ind.fibonacci_confluence_aligned) ? "ind-on" : "ind-off", state: asBool(ind.fibonacci_confluence_aligned) ? "ALIGNED" : "WAIT" },
+        { name: "Fib Nearest Level", value: `${ind.fib_nearest_percentage || "--"} @ ${ind.fib_nearest_price != null ? priceNum(pair, ind.fib_nearest_price) : "--"} | dist ${ind.fib_nearest_distance_pips != null ? num(ind.fib_nearest_distance_pips, 2) : "--"} pips`, cls: ind.fib_nearest_level ? "ind-mid" : "ind-off", state: ind.fib_nearest_level ? "NEAR" : "NONE" },
+        { name: "Fib Confluence", value: `strength ${num(ind.fib_confluence_strength, 2)} | high-prob ${ind.fib_high_probability_count ?? 0}`, cls: Number(ind.fib_confluence_strength || 0) >= 0.5 ? "ind-on" : "ind-mid", state: Number(ind.fib_confluence_strength || 0) >= 0.7 ? "STRONG" : "WATCH" },
+        { name: "Candlestick", value: `${ind.pattern || "none"} | indecision ${boolText(ind.pattern_indecision)}`, cls: asBool(ind.candlestick_confirmed) ? "ind-on" : "ind-off", state: asBool(ind.candlestick_confirmed) ? "CONFIRMED" : "WAIT" },
+      ];
+
+      renderRows(moduleListEl, moduleRows);
+      renderRows(strategyListEl, strategyRows);
+      renderRows(indicatorListEl, indicatorRows);
+    }
+
+    function smma(values, period) { const out = Array(values.length).fill(null); if (values.length < period) return out; let seed = 0; for (let i = 0; i < period; i += 1) seed += Number(values[i]); let val = seed / period; out[period - 1] = val; for (let i = period; i < values.length; i += 1) { val = ((val * (period - 1)) + Number(values[i])) / period; out[i] = val; } return out; }
+    function sma(values, period) { const out = Array(values.length).fill(null); for (let i = period - 1; i < values.length; i++) { let s = 0; for (let j = i - period + 1; j <= i; j++) s += Number(values[j]); out[i] = s / period; } return out; }
+
+    // ── Pine 3-Line Strike (raw) ─────────────────────────────────────
+    function threeLikeStrikeSignals(rows) {
+      const buy = [], sell = [];
+      for (let i = 3; i < rows.length; i++) {
+        const c  = r => Number(rows[i - r].close), o = r => Number(rows[i - r].open);
+        const bearSig = c(3) > o(3) && c(2) > o(2) && c(1) > o(1) && c(0) < o(1);
+        const bullSig = c(3) < o(3) && c(2) < o(2) && c(1) < o(1) && c(0) > o(1);
+        if (bullSig) buy.push(i);
+        if (bearSig) sell.push(i);
+      }
+      return { buy, sell };
+    }
+
+    // ── Pine Big A$$ Engulfing (Strict mode) ─────────────────────────
+    function engulfingSignals(rows, ma1, ma4, strict = true) {
+      const buy = [], sell = [];
+      for (let i = 1; i < rows.length; i++) {
+        const o = Number(rows[i].open), c = Number(rows[i].close);
+        const o1 = Number(rows[i-1].open), c1 = Number(rows[i-1].close);
+        let bullEngulf = false;
+        let bearEngulf = false;
+        if (strict) {
+          const m1 = ma1[i], m4 = ma4[i];
+          if (m1 == null || m4 == null) continue;
+          // strict bullish: price between MA1 and MA4 + engulf
+          bullEngulf = c < m1 && c > m4 && o <= c1 && o < o1 && c > o1;
+          // strict bearish
+          bearEngulf = c > m1 && c < m4 && o >= c1 && o > o1 && c < o1;
+        } else {
+          // non-strict engulf fallback
+          bullEngulf = o <= c1 && o < o1 && c > o1;
+          bearEngulf = o >= c1 && o > o1 && c < o1;
+        }
+        if (bullEngulf) buy.push(i);
+        if (bearEngulf) sell.push(i);
+      }
+      return { buy, sell };
+    }
+
+    // ── Session shading ──────────────────────────────────────────────
+    // Session times as UTC hour ranges (default Pine values: ET = UTC-5)
+    const SESSIONS = [
+      { id: "london",  el: () => showLondonEl.checked,  utcStart: 8,  utcEnd: 17, color: "rgba(0,180,0,0.13)" },
+      { id: "ny",      el: () => showNYEl.checked,      utcStart: 13, utcEnd: 22, color: "rgba(220,50,50,0.13)" },
+      { id: "tokyo",   el: () => showTokyoEl.checked,   utcStart: 1,  utcEnd: 9,  color: "rgba(220,200,0,0.13)" },
+      { id: "sydney",  el: () => showSydneyEl.checked,  utcStart: 22, utcEnd: 33, color: "rgba(0,200,200,0.13)" }, // 22-07 next day
+    ];
+
+    function drawSessions(rows) {
+      sessOverlay.innerHTML = "";
+      if (!rows.length) return;
+      const ts = chart.timeScale();
+      SESSIONS.forEach(sess => {
+        if (!sess.el()) return;
+        // Find contiguous blocks of bars within session hours
+        let blockStart = null;
+        for (let i = 0; i <= rows.length; i++) {
+          const row = rows[i];
+          const inSess = row ? (() => {
+            const d = new Date(Number(row.time) * 1000);
+            const h = d.getUTCHours();
+            if (sess.utcEnd <= 24) return h >= sess.utcStart && h < sess.utcEnd;
+            return h >= sess.utcStart || h < (sess.utcEnd - 24);
+          })() : false;
+          if (inSess && blockStart === null) blockStart = i;
+          if (!inSess && blockStart !== null) {
+            // draw band from blockStart to i-1
+            const x1 = ts.timeToCoordinate(Number(rows[blockStart].time));
+            const x2 = ts.timeToCoordinate(Number(rows[i - 1].time));
+            if (x1 != null && x2 != null && Number.isFinite(x1) && Number.isFinite(x2)) {
+              const div = document.createElement("div");
+              div.style.cssText = `position:absolute;top:0;bottom:0;left:${Math.min(x1,x2)-4}px;width:${Math.abs(x2-x1)+8}px;background:${sess.color};pointer-events:none;`;
+              sessOverlay.appendChild(div);
+            }
+            blockStart = null;
+          }
+        }
+      });
+    }
+    function atrSeries(rows, period = 14) {
+      const out = Array(rows.length).fill(null);
+      if (rows.length < period + 1) return out;
+      const tr = [];
+      for (let i = 1; i < rows.length; i += 1) {
+        const h = Number(rows[i].high), l = Number(rows[i].low), pc = Number(rows[i - 1].close);
+        tr.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+      }
+      for (let i = period; i <= tr.length; i += 1) {
+        const slice = tr.slice(i - period, i);
+        out[i] = slice.reduce((a, b) => a + b, 0) / period;
+      }
+      return out;
+    }
+    function rsiSeries(vals, period = 14) {
+      const out = Array(vals.length).fill(null);
+      if (vals.length < period + 1) return out;
+      let gain = 0, loss = 0;
+      for (let i = 1; i <= period; i += 1) {
+        const d = Number(vals[i]) - Number(vals[i - 1]);
+        gain += Math.max(d, 0);
+        loss += Math.max(-d, 0);
+      }
+      gain /= period; loss /= period;
+      out[period] = loss === 0 ? 100 : (100 - (100 / (1 + (gain / loss))));
+      for (let i = period + 1; i < vals.length; i += 1) {
+        const d = Number(vals[i]) - Number(vals[i - 1]);
+        const up = Math.max(d, 0), dn = Math.max(-d, 0);
+        gain = ((gain * (period - 1)) + up) / period;
+        loss = ((loss * (period - 1)) + dn) / period;
+        out[i] = loss === 0 ? 100 : (100 - (100 / (1 + (gain / loss))));
+      }
+      return out;
+    }
+    function rsi14(vals) {
+      const s = rsiSeries(vals, 14);
+      return s.length ? s[s.length - 1] : null;
+    }
+    function atr14(rows) {
+      const s = atrSeries(rows, 14);
+      return s.length ? s[s.length - 1] : null;
+    }
+    function adxSeries(rows, period = 14) {
+      const n = rows.length;
+      const adxOut = Array(n).fill(null);
+      const pdiOut = Array(n).fill(null);
+      const mdiOut = Array(n).fill(null);
+      if (n < period + 2) return { adx: adxOut, pdi: pdiOut, mdi: mdiOut };
+      const tr = [];
+      const dmp = [];
+      const dmm = [];
+      for (let i = 1; i < n; i += 1) {
+        const h = Number(rows[i].high), l = Number(rows[i].low);
+        const ph = Number(rows[i - 1].high), pl = Number(rows[i - 1].low), pc = Number(rows[i - 1].close);
+        const up = h - ph;
+        const dn = pl - l;
+        dmp.push((up > dn && up > 0) ? up : 0);
+        dmm.push((dn > up && dn > 0) ? dn : 0);
+        tr.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+      }
+      let trS = 0, dmpS = 0, dmmS = 0;
+      for (let i = 0; i < period; i += 1) {
+        trS += tr[i];
+        dmpS += dmp[i];
+        dmmS += dmm[i];
+      }
+      const dx = [];
+      for (let i = period; i < tr.length; i += 1) {
+        trS = ((trS * (period - 1)) + tr[i]) / period;
+        dmpS = ((dmpS * (period - 1)) + dmp[i]) / period;
+        dmmS = ((dmmS * (period - 1)) + dmm[i]) / period;
+        if (trS <= 0) continue;
+        const pdi = (dmpS / trS) * 100;
+        const mdi = (dmmS / trS) * 100;
+        const den = pdi + mdi;
+        const dxVal = den > 0 ? (Math.abs(pdi - mdi) / den) * 100 : 0;
+        const rowIdx = i + 1;
+        pdiOut[rowIdx] = pdi;
+        mdiOut[rowIdx] = mdi;
+        dx.push({ idx: rowIdx, val: dxVal });
+      }
+      for (let i = period - 1; i < dx.length; i += 1) {
+        let s = 0;
+        for (let j = i - (period - 1); j <= i; j += 1) s += dx[j].val;
+        adxOut[dx[i].idx] = s / period;
+      }
+      return { adx: adxOut, pdi: pdiOut, mdi: mdiOut };
+    }
+    function lineData(rows, seriesArr) { return rows.map((r, i) => seriesArr[i] == null ? { time: Number(r.time) } : { time: Number(r.time), value: Number(seriesArr[i]) }); }
+    function dynamic200(rows, s200) { const bull = [], bear = []; for (let i = 0; i < rows.length; i += 1) { const t = Number(rows[i].time), v = s200[i], p = i > 0 ? s200[i - 1] : null; if (v == null) { bull.push({ time: t }); bear.push({ time: t }); continue; } if (p == null || Number(v) >= Number(p)) { bull.push({ time: t, value: Number(v) }); bear.push({ time: t }); } else { bear.push({ time: t, value: Number(v) }); bull.push({ time: t }); } } return { bull, bear }; }
+    function cloudData(rows, f, s) { const bm = [], bmask = [], rm = [], rmask = []; for (let i = 0; i < rows.length; i += 1) { const t = Number(rows[i].time), fv = f[i], sv = s[i]; if (fv == null || sv == null) { bm.push({ time: t }); bmask.push({ time: t }); rm.push({ time: t }); rmask.push({ time: t }); continue; } if (Number(fv) >= Number(sv)) { bm.push({ time: t, value: Number(fv) }); bmask.push({ time: t, value: Number(sv) }); rm.push({ time: t }); rmask.push({ time: t }); } else { rm.push({ time: t, value: Number(sv) }); rmask.push({ time: t, value: Number(fv) }); bm.push({ time: t }); bmask.push({ time: t }); } } return { bm, bmask, rm, rmask }; }
+
+    // ── Apply dynamic color to MA series per-bar (segment coloring) ──
+    function applyDynColor(series, rows, vals, rsiVals, staticColor) {
+      if (!dynColorEl.checked) { series.applyOptions({ color: staticColor }); series.setData(lineData(rows, vals)); return; }
+      // Build per-segment colored data
+      const data = [];
+      for (let i = 0; i < rows.length; i++) {
+        if (vals[i] == null) { data.push({ time: Number(rows[i].time) }); continue; }
+        const col = getDynColor(rsiVals[i]) || staticColor;
+        data.push({ time: Number(rows[i].time), value: Number(vals[i]), color: col });
+      }
+      series.setData(data);
+    }
+
+    // ── Build raw TMA Overlay markers (Pine-faithful) ───────────────
+    function buildRawMarkers(rows, ma1, ma4) {
+      const markers = [];
+      const tls = threeLikeStrikeSignals(rows);
+      const eng = engulfingSignals(rows, ma1, ma4, true);
+      const buySet  = new Set([...tls.buy,  ...eng.buy]);
+      const sellSet = new Set([...tls.sell, ...eng.sell]);
+      // If strict signals are too sparse, add non-strict engulfing fallback.
+      if (buySet.size + sellSet.size < 6) {
+        const engLoose = engulfingSignals(rows, ma1, ma4, false);
+        engLoose.buy.forEach((i) => buySet.add(i));
+        engLoose.sell.forEach((i) => sellSet.add(i));
+      }
+      buySet.forEach(i  => markers.push({ time: Number(rows[i].time), position: "belowBar", color: "#26a69a", shape: "arrowUp",   text: tls.buy.includes(i) ? "3LS" : "Eng" }));
+      sellSet.forEach(i => markers.push({ time: Number(rows[i].time), position: "aboveBar", color: "#ef5350", shape: "arrowDown", text: tls.sell.includes(i) ? "3LS" : "Eng" }));
+      return markers;
+    }
+
+    // ── Confirmed "working" arrows ── gold overlay on top of raw arrows
+    // Applies the 5 quality filters identified from historical analysis:
+    //  1. MA Fan  – MA1 and MA4 are fanned apart (trending, not tangled)
+    //  2. Cloud   – RSI vs SMMA(RSI) agrees with signal direction
+    //  3. Extended – price extended past MA21 (not hugging it)
+    //  4. RSI extreme – < 38 for buys, > 62 for sells
+    //  5. Session – London (08-17 UTC) or NY (13-22 UTC) only
+    function buildConfirmedMarkers(rows, ma1, ma2, ma3, ma4, rsiVals, smmaRsi, atrVals) {
+      const confirmed = [];
+      const tls = threeLikeStrikeSignals(rows);
+      const eng = engulfingSignals(rows, ma1, ma4);
+      const allBuyIdx  = [...new Set([...tls.buy,  ...eng.buy])];
+      const allSellIdx = [...new Set([...tls.sell, ...eng.sell])];
+
+      function inTradingSession(ts) {
+        const h = new Date(Number(ts) * 1000).getUTCHours();
+        const inLondon = h >= 8  && h < 17;
+        const inNY     = h >= 13 && h < 22;
+        return inLondon || inNY;
+      }
+
+      allBuyIdx.forEach(i => {
+        if (i < 3) return;
+        if ([ma1[i], ma2[i], ma3[i], ma4[i]].some(v => v == null)) return;
+        const c  = Number(rows[i].close);
+        const m1 = Number(ma1[i]), m4 = Number(ma4[i]);
+        const rsi = rsiVals[i], sr = smmaRsi[i];
+        const atr = atrVals[i] || 0;
+
+        // 1. MA fan: spread between MA1 and MA4 must be > 0.5x ATR
+        const maFan = Math.abs(m1 - m4) > atr * 0.5;
+        // 2. Cloud: RSI must be above its SMMA (bullish cloud)
+        const cloudBull = rsi != null && sr != null && Number(rsi) > Number(sr);
+        // 3. Price extended below MA1 (oversold vs fast MA) OR at least below MA21-midpoint
+        const extended = c <= m1 * 1.0005; // price at or below 21 SMMA +0.05% buffer
+        // 4. RSI extreme: below 42 for buys
+        const rsiOK = rsi != null && Number(rsi) < 42;
+        // 5. Session
+        const sessOK = inTradingSession(rows[i].time);
+
+        // Candle body size — 3 setup bars should not all be tiny (avoid chop)
+        const avgBody = (Math.abs(Number(rows[i-1].close)-Number(rows[i-1].open))
+                       + Math.abs(Number(rows[i-2].close)-Number(rows[i-2].open))
+                       + Math.abs(Number(rows[i-3].close)-Number(rows[i-3].open))) / 3;
+        const bodyOK = avgBody > atr * 0.1;
+
+        const score = (maFan ? 1 : 0) + (cloudBull ? 1 : 0) + (extended ? 1 : 0) + (rsiOK ? 1 : 0) + (bodyOK ? 1 : 0) + (sessOK ? 1 : 0);
+        if (score >= 5 || (score >= 4 && sessOK)) {
+          confirmed.push({ time: Number(rows[i].time), position: "belowBar", color: "#FFD700", shape: "circle", text: "\u2605" });
+        }
+      });
+
+      allSellIdx.forEach(i => {
+        if (i < 3) return;
+        if ([ma1[i], ma2[i], ma3[i], ma4[i]].some(v => v == null)) return;
+        const c  = Number(rows[i].close);
+        const m1 = Number(ma1[i]), m4 = Number(ma4[i]);
+        const rsi = rsiVals[i], sr = smmaRsi[i];
+        const atr = atrVals[i] || 0;
+
+        // 1. MA fan (relaxed to 0.3x ATR)
+        const maFan = Math.abs(m1 - m4) > atr * 0.3;
+        // 2. Cloud: RSI below SMMA (bearish cloud)
+        const cloudBear = rsi != null && sr != null && Number(rsi) < Number(sr);
+        // 3. Price extended above MA1
+        const extended = c >= m1 * 0.9995;
+        // 4. RSI extreme: above 55 for sells
+        const rsiOK = rsi != null && Number(rsi) > 55;
+        // 5. Session
+        const sessOK = inTradingSession(rows[i].time);
+
+        const avgBody = (Math.abs(Number(rows[i-1].close)-Number(rows[i-1].open))
+                       + Math.abs(Number(rows[i-2].close)-Number(rows[i-2].open))
+                       + Math.abs(Number(rows[i-3].close)-Number(rows[i-3].open))) / 3;
+        const bodyOK = avgBody > atr * 0.1;
+
+        const score = (maFan ? 1 : 0) + (cloudBear ? 1 : 0) + (extended ? 1 : 0) + (rsiOK ? 1 : 0) + (bodyOK ? 1 : 0) + (sessOK ? 1 : 0);
+        if (score >= 5 || (score >= 4 && sessOK)) {
+          confirmed.push({ time: Number(rows[i].time), position: "aboveBar", color: "#FFD700", shape: "circle", text: "\u2605" });
+        }
+      });
+
+      return confirmed;
+    }
+
+    function buildWorkingLevels(rows, pair, atrv) {
+      const lb = 5;
+      const pivH = [];
+      const pivL = [];
+      const start = Math.max(lb, rows.length - 260);
+      const end = rows.length - lb;
+      for (let i = start; i < end; i += 1) {
+        const h = Number(rows[i].high);
+        const l = Number(rows[i].low);
+        let isH = true;
+        let isL = true;
+        for (let j = i - lb; j <= i + lb; j += 1) {
+          if (j === i) continue;
+          if (Number(rows[j].high) > h) isH = false;
+          if (Number(rows[j].low) < l) isL = false;
+          if (!isH && !isL) break;
+        }
+        if (isH) pivH.push(h);
+        if (isL) pivL.push(l);
+      }
+
+      const tol = Math.max((atrv || (pipSize(pair) * 20)) * 0.75, pipSize(pair) * 10);
+      function cluster(vals) {
+        const bins = [];
+        vals.sort((a, b) => a - b).forEach((v) => {
+          let hit = false;
+          for (let i = 0; i < bins.length; i += 1) {
+            if (Math.abs(v - bins[i].level) <= tol) {
+              const t = bins[i].touches + 1;
+              bins[i].level = ((bins[i].level * bins[i].touches) + v) / t;
+              bins[i].touches = t;
+              hit = true;
+              break;
+            }
+          }
+          if (!hit) bins.push({ level: v, touches: 1 });
+        });
+        return bins.filter((b) => b.touches >= 2).sort((a, b) => b.touches - a.touches).slice(0, 3);
+      }
+      return { supports: cluster(pivL), resistances: cluster(pivH), tol };
+    }
+
+    function strictArtyMarkers(rows, ma1, ma2, ma3, ma4, pair) {
+      const markers = [];
+      const closes = rows.map((r) => Number(r.close));
+      const rsi = rsiSeries(closes, 14);
+      const adxPack = adxSeries(rows, 14);
+      const atr = atrSeries(rows, 14);
+      const work = buildWorkingLevels(rows, pair, atr.length ? atr[atr.length - 1] : null);
+      let lastBuyIdx = -999;
+      let lastSellIdx = -999;
+
+      for (let i = 4; i < rows.length; i += 1) {
+        if ([ma1[i], ma2[i], ma3[i], ma4[i]].some((v) => v == null)) continue;
+        const o = Number(rows[i].open), c = Number(rows[i].close), h = Number(rows[i].high), l = Number(rows[i].low);
+        const o1 = Number(rows[i - 1].open), c1 = Number(rows[i - 1].close);
+        const ph = Number(rows[i - 1].high), pl = Number(rows[i - 1].low);
+        const rng = Math.max(h - l, pipSize(pair) * 4);
+        const body = Math.abs(c - o);
+        const bodyRatio = body / rng;
+
+        // Pine code: 3 Line Strike
+        const bear3 = Number(rows[i - 3].close) > Number(rows[i - 3].open)
+          && Number(rows[i - 2].close) > Number(rows[i - 2].open)
+          && Number(rows[i - 1].close) > Number(rows[i - 1].open)
+          && c < o1;
+        const bull3 = Number(rows[i - 3].close) < Number(rows[i - 3].open)
+          && Number(rows[i - 2].close) < Number(rows[i - 2].open)
+          && Number(rows[i - 1].close) < Number(rows[i - 1].open)
+          && c > o1;
+
+        // Pine code: strict Big A$$ engulfing
+        const engulfBullCore = o <= c1 && o < o1 && c > o1;
+        const engulfBearCore = o >= c1 && o > o1 && c < o1;
+        const bullEngulfStrict = c < Number(ma1[i]) && c > Number(ma4[i]) && engulfBullCore;
+        const bearEngulfStrict = c > Number(ma1[i]) && c < Number(ma4[i]) && engulfBearCore;
+
+        const rawBuy = bull3 || bullEngulfStrict;
+        const rawSell = bear3 || bearEngulfStrict;
+        if (!rawBuy && !rawSell) continue;
+
+        // Multi-factor quality filter to reduce fake arrows.
+        const trendBull = Number(ma1[i]) > Number(ma2[i]) && c > Number(ma4[i]);
+        const trendBear = Number(ma1[i]) < Number(ma2[i]) && c < Number(ma4[i]);
+        const continuationBull = c > ph;
+        const continuationBear = c < pl;
+        const rsiV = rsi[i];
+        const rsiBull = rsiV != null && Number(rsiV) >= 50 && Number(rsiV) <= 80;
+        const rsiBear = rsiV != null && Number(rsiV) <= 50 && Number(rsiV) >= 20;
+        const adx = adxPack.adx[i], pdi = adxPack.pdi[i], mdi = adxPack.mdi[i];
+        const adxBull = adx != null && Number(adx) >= 22 && pdi != null && mdi != null && Number(pdi) > Number(mdi);
+        const adxBear = adx != null && Number(adx) >= 22 && pdi != null && mdi != null && Number(mdi) > Number(pdi);
+        const zoneTol = work.tol || Math.max((atr[i] || 0) * 0.6, pipSize(pair) * 8);
+        const nearSupport = work.supports.length
+          ? work.supports.some((z) => Math.abs(l - Number(z.level)) <= zoneTol || Math.abs(c - Number(z.level)) <= zoneTol * 0.7)
+          : c <= Number(ma1[i]) + zoneTol;
+        const nearResistance = work.resistances.length
+          ? work.resistances.some((z) => Math.abs(h - Number(z.level)) <= zoneTol || Math.abs(c - Number(z.level)) <= zoneTol * 0.7)
+          : c >= Number(ma1[i]) - zoneTol;
+        const strongBody = bodyRatio >= 0.30;
+
+        // Score-based strict filter to avoid "no arrows" while still filtering noise.
+        const buyScore =
+          (trendBull ? 1 : 0) +
+          (continuationBull ? 1 : 0) +
+          (rsiBull ? 1 : 0) +
+          (adxBull ? 1 : 0) +
+          (nearSupport ? 1 : 0) +
+          (strongBody ? 1 : 0);
+        const sellScore =
+          (trendBear ? 1 : 0) +
+          (continuationBear ? 1 : 0) +
+          (rsiBear ? 1 : 0) +
+          (adxBear ? 1 : 0) +
+          (nearResistance ? 1 : 0) +
+          (strongBody ? 1 : 0);
+
+        const allowBuy = rawBuy && buyScore >= 4;
+        const allowSell = rawSell && sellScore >= 4;
+        if (!allowBuy && !allowSell) continue;
+        if (allowBuy && i - lastBuyIdx >= 10) {
+          markers.push({ time: Number(rows[i].time), position: "belowBar", color: "#22c55e", shape: "arrowUp", text: "" });
+          lastBuyIdx = i;
+        }
+        if (allowSell && i - lastSellIdx >= 10) {
+          markers.push({ time: Number(rows[i].time), position: "aboveBar", color: "#ef4444", shape: "arrowDown", text: "" });
+          lastSellIdx = i;
+        }
+      }
+      return { markers, working: work };
+    }
+
+    function drawZones(analysis) {
+      zoneOverlay.innerHTML = "";
+      const z = [];
+      let fibRetr = null;
+      let fibExt = null;
+      let fibNearestRatio = null;
+      if (analysis && analysis.levels) {
+        const s = analysis.levels.nearest_supply, d = analysis.levels.nearest_demand;
+        if (s && s.low != null && s.high != null) z.push({ name: "Supply", low: Number(s.low), high: Number(s.high) });
+        if (d && d.low != null && d.high != null) z.push({ name: "Demand", low: Number(d.low), high: Number(d.high) });
+        fibRetr = analysis.levels.fib_retracement_levels || null;
+        fibExt = analysis.levels.fib_extension_levels || null;
+        fibNearestRatio = analysis.levels?.fib_nearest_level?.ratio != null ? String(analysis.levels.fib_nearest_level.ratio) : null;
+      }
+      z.forEach((it) => {
+        const y1 = candles.priceToCoordinate(Number(it.high)), y2 = candles.priceToCoordinate(Number(it.low));
+        if (y1 == null || y2 == null || !Number.isFinite(y1) || !Number.isFinite(y2)) return;
+        const band = document.createElement("div");
+        band.className = "zone-band";
+        band.style.top = `${Math.round(Math.min(y1, y2))}px`;
+        band.style.height = `${Math.max(6, Math.round(Math.abs(y2 - y1)))}px`;
+        const label = document.createElement("div");
+        label.className = "zone-label";
+        label.textContent = it.name;
+        band.appendChild(label);
+        zoneOverlay.appendChild(band);
+      });
+
+      const fibMeta = {
+        "0.000": { label: "0%", color: "#787B86", solid: true },
+        "0.236": { label: "23.6%", color: "#787B86" },
+        "0.382": { label: "38.2%", color: "#F23645" },
+        "0.500": { label: "50%", color: "#4CAF50", solid: true },
+        "0.618": { label: "61.8%", color: "#2962FF" },
+        "0.786": { label: "78.6%", color: "#9C27B0" },
+        "1.000": { label: "100%", color: "#787B86", solid: true },
+        "1.272": { label: "127.2%", color: "#FF9800" },
+        "1.618": { label: "161.8%", color: "#E91E63" },
+      };
+
+      const levelRows = [];
+      if (fibRetr && typeof fibRetr === "object") {
+        Object.entries(fibRetr).forEach(([k, v]) => levelRows.push({ k: String(k), v: Number(v), ext: false }));
+      }
+      if (fibExt && typeof fibExt === "object") {
+        ["1.272", "1.618"].forEach((k) => {
+          if (fibExt[k] != null) levelRows.push({ k, v: Number(fibExt[k]), ext: true });
+        });
+      }
+      const h = chartContainer.clientHeight || 0;
+      levelRows.forEach((lv) => {
+        if (!Number.isFinite(lv.v)) return;
+        const y = candles.priceToCoordinate(lv.v);
+        if (y == null || !Number.isFinite(y)) return;
+        if (h > 0 && (y < -120 || y > h + 120)) return;
+        const key = Number(lv.k).toFixed(3);
+        const meta = fibMeta[key] || { label: `${(Number(lv.k) * 100).toFixed(1)}%`, color: "#6366f1" };
+        const line = document.createElement("div");
+        line.className = "fib-line";
+        line.style.top = `${Math.round(y)}px`;
+        line.style.borderTopColor = meta.color;
+        line.style.borderTopStyle = meta.solid ? "solid" : "dashed";
+        if (fibNearestRatio && Number(fibNearestRatio).toFixed(3) === key) {
+          line.classList.add("fib-nearest");
+        }
+        const lab = document.createElement("div");
+        lab.className = "fib-label";
+        lab.style.color = meta.color;
+        lab.textContent = `${meta.label} ${fmt(pairEl.value || "EUR_USD", lv.v)}`;
+        line.appendChild(lab);
+        zoneOverlay.appendChild(line);
+      });
+    }
+
+    let markerApi = null;
+    function applyMarkers(series, markers) {
+      if (typeof series.setMarkers === "function") {
+        series.setMarkers(markers);
+        return;
+      }
+      if (!markerApi && typeof LightweightCharts.createSeriesMarkers === "function") {
+        markerApi = LightweightCharts.createSeriesMarkers(series, markers);
+        return;
+      }
+      if (markerApi && typeof markerApi.setMarkers === "function") {
+        markerApi.setMarkers(markers);
+      }
+    }
+
+    function updateHud(pair, payload, analysis, rows, s21, s50, s200, atrv, rsiv) {
+      const tfLabel = (payload.timeframe || timeframe).replace("M15", "15m").replace("H1", "1h").replace("H4", "4h");
+      pairLineEl.textContent = `${pair.replace("_", "/")} · ${tfLabel} · ${(payload.source || "oanda").toUpperCase()}`;
+      if (rows.length > 1) {
+        const last = rows[rows.length - 1], prev = rows[rows.length - 2];
+        const chg = Number(last.close) - Number(prev.close), pct = Number(prev.close) ? (chg / Number(prev.close)) * 100 : 0, sign = chg >= 0 ? "+" : "";
+        ohlcLineEl.style.color = chg >= 0 ? "#0f766e" : "#b91c1c";
+        ohlcLineEl.textContent = `O ${fmt(pair, last.open)} H ${fmt(pair, last.high)} L ${fmt(pair, last.low)} C ${fmt(pair, last.close)} ${sign}${fmt(pair, chg)} (${sign}${pct.toFixed(2)}%)`;
+      }
+      const price = Number(payload.current_price || 0), spread = Math.max(pipSize(pair) * 1.8, price * 0.00002);
+      sellPriceEl.textContent = fmt(pair, price - spread * 0.5);
+      buyPriceEl.textContent = fmt(pair, price + spread * 0.5);
+      const cloudState = analysis?.indicators?.arty_cloud_state || ((s21[s21.length - 1] != null && s50[s50.length - 1] != null && Number(s21[s21.length - 1]) >= Number(s50[s50.length - 1])) ? "bullish" : "bearish");
+      // Removed text update from indicatorHudEl per user request
+      indicatorHudEl.textContent = "";
+      const risk = atrv != null ? Math.max(atrv * 1.25, pipSize(pair) * 12) : Math.max(price * 0.0015, pipSize(pair) * 12);
+      const plan = analysis?.trade_plan || null;
+      let lt = price + risk * 2, lb = price + risk, ls = price - risk, st = price - risk * 2, sb = price - risk, ss = price + risk;
+      if (plan && Number.isFinite(Number(plan.entry)) && Number.isFinite(Number(plan.sl)) && Number.isFinite(Number(plan.tp3))) {
+        const e = Number(plan.entry), sl = Number(plan.sl), tp3 = Number(plan.tp3), rrRisk = Math.abs(e - sl), dir = String(plan.direction || "").toUpperCase();
+        if (dir === "BUY") { lt = tp3; lb = e; ls = sl; st = e - (tp3 - e); sb = e; ss = e + rrRisk; }
+        if (dir === "SELL") { st = tp3; sb = e; ss = sl; lt = e + (e - tp3); lb = e; ls = e - rrRisk; }
+      }
+      longTargetEl.textContent = fmt(pair, lt); shortTargetEl.textContent = fmt(pair, st);
+      longBEEl.textContent = fmt(pair, lb); shortBEEl.textContent = fmt(pair, sb);
+      longStopEl.textContent = fmt(pair, ls); shortStopEl.textContent = fmt(pair, ss);
+      const atrPips = atrv != null ? (Number(atrv) / pipSize(pair)) : null;
+      atrHudEl.textContent = `ATR ${atrPips != null ? atrPips.toFixed(1) : "--"} pips`;
+      const bReasons = (analysis?.indicators?.arty_buy_block_reasons || []).slice(0, 2).join("; ");
+      const sReasons = (analysis?.indicators?.arty_sell_block_reasons || []).slice(0, 2).join("; ");
+      const cls = analysis?.indicators?.arty_buy_arrow ? "ok" : analysis?.indicators?.arty_sell_arrow ? "bad" : "warn";
+      stripEl.innerHTML = `ARTY: <span class="${cls}">${analysis?.state || "SCANNING"}</span> | Buy reasons: ${bReasons || "none"} | Sell reasons: ${sReasons || "none"}`;
+    }
+
+    function updateLive(pair, payload) {
+      const price = Number(payload.current_price || 0);
+      if (!Number.isFinite(price) || price <= 0) { liveMarker.style.display = "none"; return; }
+      const f = payload.forming || null; const up = f ? Number(f.close) >= Number(f.open) : true; const col = up ? "#06a086" : "#ef4444";
+      const y = candles.priceToCoordinate(price); if (y == null || !Number.isFinite(y)) { liveMarker.style.display = "none"; return; }
+      liveMarkerPriceEl.textContent = fmt(pair, price); liveMarkerTimeEl.textContent = cd(payload.time_remaining || 0);
+      liveMarker.style.backgroundColor = col; liveMarker.style.top = `${Math.round(y)}px`; liveMarker.style.display = "flex";
+      livePriceLine.applyOptions({ price, color: col });
+    }
+
+    async function refresh() {
+      if (inFlight) { schedule(150); return; }
+      inFlight = true; const t0 = performance.now();
+      try {
+        errorEl.textContent = "";
+        const pair = pairEl.value;
+        const [cRes, aRes] = await Promise.all([
+          fetch(`/api/arty/chart?pair=${encodeURIComponent(pair)}&timeframe=${encodeURIComponent(timeframe)}&count=700`, { cache: "no-store" }),
+          fetch("/api/analysis", { cache: "no-store" }),
+        ]);
+        const payload = await cRes.json(); const allAnalysis = await aRes.json(); const analysis = allAnalysis?.[pair] || null;
+        lastAnalysis = analysis;
+        if (!payload?.ok) throw new Error(payload?.error || "Chart API failed");
+        const rows = payload.forming ? [...(payload.completed || []), payload.forming] : (payload.completed || []);
+        const candlesData = rows.map((c) => ({ time: Number(c.time), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close) }));
+        const volumeData = rows.map((c) => ({ time: Number(c.time), value: Number(c.volume || 0), color: Number(c.close) >= Number(c.open) ? "rgba(6,160,134,0.35)" : "rgba(239,68,68,0.35)" }));
+        candles.setData(candlesData); volume.setData(volumeData);
+        const closes = rows.map((c) => Number(c.close));
+        const s21 = smma(closes, 21), s50 = smma(closes, 50), s100 = smma(closes, 100), s200 = smma(closes, 200);
+        const rsiVals = rsiSeries(closes, 14);
+        // RSI fill between MA1/MA2 using RSI vs SMMA(RSI) — Pine Trend Fill
+        const rsiArr = rsiVals; // already computed above
+        const smmaRsi = smma(rsiArr.map(v => v == null ? 0 : v), 50);
+        const rfBull = [], rfBear = [];
+        for (let i = 0; i < rows.length; i++) {
+          const t = Number(rows[i].time), r = rsiArr[i], sr = smmaRsi[i], m1 = s21[i], m2 = s50[i];
+          if (r == null || sr == null || m1 == null || m2 == null) { rfBull.push({time:t}); rfBear.push({time:t}); continue; }
+          if (r > sr) { rfBull.push({time:t,value:Math.max(m1,m2)}); rfBear.push({time:t,value:Math.min(m1,m2)}); }
+          else        { rfBear.push({time:t,value:Math.max(m1,m2)}); rfBull.push({time:t,value:Math.min(m1,m2)}); }
+        }
+        cloudBullMain.setData(rfBull); cloudBullMask.setData(rfBear);
+        cloudBearMain.setData(rfBear); cloudBearMask.setData(rfBull);
+        // Dynamic or static MA coloring
+        applyDynColor(sm21Series,  rows, s21,  rsiVals, "#22c55e");
+        applyDynColor(sm50Series,  rows, s50,  rsiVals, "#ef4444");
+        applyDynColor(sm100Series, rows, s100, rsiVals, "#eab308");
+        // Dynamic 200 (rises=green, falls=red, regardless of dynColor toggle)
+        if (dynColorEl.checked) {
+          const d2 = dynamic200(rows, s200);
+          sm200BullSeries.setData(d2.bull);
+          sm200BearSeries.setData(d2.bear);
+          sm200Series.setData(lineData(rows, Array(rows.length).fill(null)));
+        } else {
+          sm200Series.setData(lineData(rows, s200));
+          sm200BullSeries.setData(lineData(rows, Array(rows.length).fill(null)));
+          sm200BearSeries.setData(lineData(rows, Array(rows.length).fill(null)));
+        }
+        // Markers:
+        // 1) Raw arrows (all),
+        // 2) Strict multi-factor arrows (working),
+        // 3) Star markers for highest-confidence subset.
+        const rawMarkers = buildRawMarkers(rows, s21, s200);
+        const markerPack = strictArtyMarkers(rows, s21, s50, s100, s200, pair);
+        const strictMarkers = markerPack.markers || [];
+        localWorking = markerPack.working || { supports: [], resistances: [], tol: 0 };
+        // Always add confirmed gold ★ arrows on top of whichever set is active
+        const atrVals = atrSeries(rows, 14);
+        const confirmedMarkers = buildConfirmedMarkers(rows, s21, s50, s100, s200, rsiVals, smmaRsi, atrVals);
+        const merged = [...rawMarkers, ...strictMarkers, ...(confirmedMarkers || [])];
+        const uniq = new Map();
+        merged.forEach((m) => {
+          const key = `${Number(m.time)}|${m.position}|${m.shape}`;
+          const old = uniq.get(key);
+          const pri = (x) => {
+            if (!x) return -1;
+            if (String(x.text || "").includes("★")) return 3;
+            if (!x.text) return 2;
+            return 1;
+          };
+          if (!old || pri(m) >= pri(old)) uniq.set(key, m);
+        });
+        applyMarkers(candles, [...uniq.values()].sort((a, b) => Number(a.time) - Number(b.time)));
+        lastRows = rows;
+        drawSessions(rows);
+        const atrv = atr14(rows), rsiv = rsi14(closes);
+        updateHud(pair, payload, analysis, rows, s21, s50, s200, atrv, rsiv);
+        renderIndicatorPanel(pair, payload, analysis);
+        drawZones(analysis); updateLive(pair, payload);
+        if (autoScrollEl.checked) chart.timeScale().scrollToRealTime();
+        statusEl.textContent = `${pair.replace("_", "/")} ${timeframe} | ${new Date(payload.server_time).toLocaleTimeString()} | ${Math.round(performance.now() - t0)}ms`;
+        if (payload.warning) errorEl.textContent = payload.warning;
+      } catch (e) {
+        errorEl.textContent = `Error: ${e.message}`;
+        renderIndicatorPanel(pairEl.value || "EUR_USD", null, null);
+      } finally {
+        inFlight = false; schedule(600);
+      }
+    }
+
+    function schedule(ms) { if (refreshHandle) clearTimeout(refreshHandle); refreshHandle = setTimeout(refresh, ms); }
+    function setTf() { tfButtons.forEach((b) => b.classList.toggle("active", b.dataset.tf === timeframe)); }
+    // Redraw sessions on pan/zoom/toggle
+    chart.timeScale().subscribeVisibleTimeRangeChange(() => drawSessions(lastRows));
+    [showLondonEl, showNYEl, showTokyoEl, showSydneyEl].forEach(el => el.addEventListener("change", () => drawSessions(lastRows)));
+    dynColorEl.addEventListener("change", refresh);
+    showRawEl.addEventListener("change", refresh);
+    indicatorBtnEl.addEventListener("click", () => setIndicatorPanelOpen(!indicatorPanelOpen));
+    indicatorCloseEl.addEventListener("click", () => setIndicatorPanelOpen(false));
+    indicatorBackdropEl.addEventListener("click", () => setIndicatorPanelOpen(false));
+    document.addEventListener("keydown", (evt) => {
+      if (evt.key === "Escape" && indicatorPanelOpen) setIndicatorPanelOpen(false);
+    });
+
+    (function init() {
+      const list = Array.isArray(PAIRS) && PAIRS.length ? PAIRS : ["EUR_USD"];
+      list.forEach((p) => { const opt = document.createElement("option"); opt.value = p; opt.textContent = p.replace("_", "/"); pairEl.appendChild(opt); });
+      pairEl.value = list.includes("EUR_USD") ? "EUR_USD" : list[0];
+      tfButtons.forEach((b) => b.addEventListener("click", () => { timeframe = b.dataset.tf; setTf(); refresh(); }));
+      pairEl.addEventListener("change", refresh);
+      autoScrollEl.addEventListener("change", () => { if (autoScrollEl.checked) chart.timeScale().scrollToRealTime(); });
+      window.addEventListener("resize", () => { chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight }); drawZones(lastAnalysis); });
+      setTf();
+      renderIndicatorPanel(pairEl.value, null, null);
+      refresh();
+    })();
+  </script>
+</body>
+</html>
+

@@ -1,0 +1,418 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Trading Chart</title>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root {
+      --bg: #0f1320;
+      --panel: #151b2b;
+      --border: #232d46;
+      --text: #d7dce8;
+      --muted: #8c97b2;
+      --up: #26a69a;
+      --down: #ef5350;
+      --accent: #2962ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    .toolbar {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      flex-wrap: wrap;
+    }
+    select, button, .chip {
+      background: #101728;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 14px;
+    }
+    .tf-group button { cursor: pointer; }
+    .tf-group button.active {
+      border-color: var(--accent);
+      color: #fff;
+      background: rgba(41,98,255,0.25);
+    }
+    .spacer { flex: 1; }
+    .live {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #00c853;
+      box-shadow: 0 0 0 0 rgba(0, 200, 83, 0.8);
+      animation: pulse 1.6s infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(0, 200, 83, 0.8); }
+      70% { box-shadow: 0 0 0 12px rgba(0, 200, 83, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(0, 200, 83, 0); }
+    }
+    #chart-wrap {
+      height: calc(100vh - 62px);
+      padding: 8px 10px 10px;
+    }
+    #chart {
+      height: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      position: relative;
+    }
+    .tv-live-marker {
+      position: absolute;
+      right: 0;
+      top: 0;
+      transform: translateY(-50%);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-width: 64px;
+      padding: 4px 8px;
+      color: #ffffff;
+      border-radius: 4px 0 0 4px;
+      font-weight: 700;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      pointer-events: none;
+      z-index: 30;
+      line-height: 1.05;
+    }
+    .tv-live-marker .tv-price {
+      font-size: 24px;
+      letter-spacing: -0.3px;
+    }
+    .tv-live-marker .tv-time {
+      margin-top: 2px;
+      font-size: 12px;
+      opacity: 0.95;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .error {
+      color: #ff8a80;
+      font-size: 13px;
+      margin-left: 8px;
+    }
+    .status {
+      color: var(--muted);
+      font-size: 12px;
+      margin-left: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <select id="pair">
+      {% for p in pairs %}
+      <option value="{{ p }}" {% if p == default_pair %}selected{% endif %}>{{ p.replace('_', '/') }}</option>
+      {% endfor %}
+    </select>
+
+    <div class="tf-group">
+      <button data-tf="M15" class="active">15M</button>
+      <button data-tf="H1">1H</button>
+      <button data-tf="H4">4H</button>
+    </div>
+
+    <label class="chip">
+      <input id="auto-scroll" type="checkbox" />
+      Auto-scroll
+    </label>
+
+    <div class="spacer"></div>
+
+    <div class="live">
+      <span class="dot"></span>
+      <span>LIVE</span>
+      <span id="price">--</span>
+      <span id="countdown" class="chip">--:--</span>
+    </div>
+
+    <span id="status" class="status"></span>
+    <span id="error" class="error"></span>
+  </div>
+
+  <div id="chart-wrap"><div id="chart"></div></div>
+
+  <script>
+    const pairEl = document.getElementById("pair");
+    const tfButtons = [...document.querySelectorAll(".tf-group button")];
+    const autoScrollEl = document.getElementById("auto-scroll");
+    const priceEl = document.getElementById("price");
+    const countdownEl = document.getElementById("countdown");
+    const errorEl = document.getElementById("error");
+    const statusEl = document.getElementById("status");
+
+    let timeframe = "M15";
+    let refreshHandle = null;
+    let refreshInFlight = false;
+    let requestSeq = 0;
+    let appliedSeq = 0;
+    let lastPayload = null;
+
+    const chartContainer = document.getElementById("chart");
+    const chart = LightweightCharts.createChart(chartContainer, {
+      width: chartContainer.clientWidth,
+      height: chartContainer.clientHeight,
+      layout: {
+        background: { color: "#0f1320" },
+        textColor: "#d7dce8"
+      },
+      grid: {
+        vertLines: { color: "#1a2236" },
+        horzLines: { color: "#1a2236" }
+      },
+      rightPriceScale: { borderColor: "#2b3550" },
+      timeScale: {
+        borderColor: "#2b3550",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 6,
+        barSpacing: 8,
+        minBarSpacing: 0.5
+      },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      // TradingView-like free view: drag to pan + mouse wheel to zoom.
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true
+      },
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: true
+      }
+    });
+
+    const candles = chart.addCandlestickSeries({
+      upColor: "#26a69a",
+      downColor: "#ef5350",
+      borderVisible: false,
+      wickUpColor: "#26a69a",
+      wickDownColor: "#ef5350",
+      priceLineVisible: false,
+      lastValueVisible: false
+    });
+
+    const volume = chart.addHistogramSeries({
+      color: "rgba(38,166,154,0.4)",
+      priceFormat: { type: "volume" },
+      priceScaleId: "",
+      scaleMargins: { top: 0.82, bottom: 0 }
+    });
+
+    // Keep candles in upper pane and volume in lower pane (single-chart split style).
+    chart.priceScale("right").applyOptions({
+      scaleMargins: { top: 0.05, bottom: 0.30 }
+    });
+    chart.priceScale("").applyOptions({
+      scaleMargins: { top: 0.75, bottom: 0.00 }
+    });
+
+    const liveMarker = document.createElement("div");
+    liveMarker.className = "tv-live-marker";
+    liveMarker.innerHTML = '<div class="tv-price">--</div><div class="tv-time">--:--</div>';
+    chartContainer.appendChild(liveMarker);
+    const liveMarkerPriceEl = liveMarker.querySelector(".tv-price");
+    const liveMarkerTimeEl = liveMarker.querySelector(".tv-time");
+
+    const livePriceLine = candles.createPriceLine({
+      price: 0,
+      color: "#ef5350",
+      lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      lineVisible: true,
+      axisLabelVisible: false,
+      title: ""
+    });
+
+    function formatPrice(pair, v) {
+      const p = pair || "";
+      if (p.endsWith("JPY")) return Number(v).toFixed(3);
+      if (p.startsWith("BTC")) return Number(v).toFixed(2);
+      if (p.startsWith("XAU") || p.startsWith("XAG")) return Number(v).toFixed(3);
+      return Number(v).toFixed(5);
+    }
+
+    function formatCountdown(s) {
+      const n = Math.max(0, Number(s || 0));
+      const m = Math.floor(n / 60);
+      const sec = n % 60;
+      return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+    }
+
+    function applyTfButtonState() {
+      tfButtons.forEach(btn => btn.classList.toggle("active", btn.dataset.tf === timeframe));
+    }
+
+    function updateLiveMarker(pair, payload) {
+      const price = Number(payload.current_price || 0);
+      if (!Number.isFinite(price) || price <= 0) {
+        liveMarker.style.display = "none";
+        return;
+      }
+
+      const forming = payload.forming || null;
+      const bullish = forming ? Number(forming.close) >= Number(forming.open) : true;
+      const markerColor = bullish ? "#26a69a" : "#ef5350";
+      const y = candles.priceToCoordinate(price);
+
+      if (y == null || !Number.isFinite(y)) {
+        liveMarker.style.display = "none";
+        return;
+      }
+
+      liveMarkerPriceEl.textContent = formatPrice(pair, price);
+      liveMarkerTimeEl.textContent = formatCountdown(payload.time_remaining || 0);
+      liveMarker.style.backgroundColor = markerColor;
+      liveMarker.style.top = `${Math.round(y)}px`;
+      liveMarker.style.display = "flex";
+
+      livePriceLine.applyOptions({
+        price,
+        color: markerColor
+      });
+    }
+
+    async function fetchChartData(pairOverride) {
+      const pair = pairOverride || pairEl.value;
+      const url = `/api/live-candles?pair=${encodeURIComponent(pair)}&timeframe=${encodeURIComponent(timeframe)}&count=500`;
+      const res = await fetch(url, { cache: "no-store" });
+      return await res.json();
+    }
+
+    function renderData(payload) {
+      lastPayload = payload;
+      const pair = payload.pair;
+      const source = payload.source || "oanda";
+      const completed = payload.completed || [];
+      const forming = payload.forming || null;
+      const all = forming ? [...completed, forming] : completed;
+
+      const candleData = all.map(c => ({
+        time: Number(c.time),
+        open: Number(c.open),
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close)
+      }));
+
+      const volumeData = all.map(c => ({
+        time: Number(c.time),
+        value: Number(c.volume || 0),
+        color: Number(c.close) >= Number(c.open) ? "rgba(38,166,154,0.45)" : "rgba(239,83,80,0.45)"
+      }));
+
+      candles.setData(candleData);
+      volume.setData(volumeData);
+
+      if (autoScrollEl.checked) {
+        chart.timeScale().scrollToRealTime();
+      }
+
+      priceEl.textContent = formatPrice(pair, payload.current_price || 0);
+      countdownEl.textContent = formatCountdown(payload.time_remaining || 0);
+      updateLiveMarker(pair, payload);
+      const effectivePair = payload.effective_pair || pair;
+      const feedNote = effectivePair !== pair ? ` (feed: ${effectivePair.replace("_", "/")})` : "";
+      const sourceNote = source !== "oanda" ? ` [${source}]` : "";
+      statusEl.textContent = `${pair.replace("_", "/")} ${timeframe} - ${new Date(payload.server_time).toLocaleTimeString()}${feedNote}${sourceNote}`;
+
+      if (payload.warning) {
+        errorEl.textContent = payload.warning;
+      }
+    }
+
+    function scheduleNextRefresh(ms = 1000) {
+      if (refreshHandle) clearTimeout(refreshHandle);
+      refreshHandle = setTimeout(refreshChart, ms);
+    }
+
+    async function refreshChart() {
+      if (refreshInFlight) {
+        scheduleNextRefresh(150);
+        return;
+      }
+
+      refreshInFlight = true;
+      const seq = ++requestSeq;
+      const startedAt = performance.now();
+      try {
+        errorEl.textContent = "";
+        const payload = await fetchChartData();
+        if (!payload.ok) {
+          throw new Error(payload.error || "Unknown API error");
+        }
+
+        if (seq < appliedSeq) {
+          return;
+        }
+        appliedSeq = seq;
+
+        renderData(payload);
+        const elapsed = Math.round(performance.now() - startedAt);
+        if (statusEl.textContent) {
+          statusEl.textContent += ` | ${elapsed}ms`;
+        }
+      } catch (err) {
+        errorEl.textContent = `Error: ${err.message}`;
+      } finally {
+        refreshInFlight = false;
+        scheduleNextRefresh(1000);
+      }
+    }
+
+    function startLoop() {
+      if (refreshHandle) clearTimeout(refreshHandle);
+      refreshInFlight = false;
+      requestSeq = 0;
+      appliedSeq = 0;
+      refreshChart();
+    }
+
+    tfButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        timeframe = btn.dataset.tf;
+        applyTfButtonState();
+        startLoop();
+      });
+    });
+
+    pairEl.addEventListener("change", startLoop);
+    autoScrollEl.addEventListener("change", () => {
+      if (autoScrollEl.checked) chart.timeScale().scrollToRealTime();
+    });
+
+    window.addEventListener("resize", () => {
+      chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
+      if (lastPayload) {
+        updateLiveMarker(lastPayload.pair || pairEl.value, lastPayload);
+      }
+    });
+
+    applyTfButtonState();
+    startLoop();
+  </script>
+</body>
+</html>
+
